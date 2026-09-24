@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>JARVIS Mobile Gesture System</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    body, html {
+      width: 100%;
+      height: 100%;
+      background-color: #020813;
+      color: #00f0ff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Courier New', monospace;
+      overflow: hidden;
+    }
+    #canvas-container {
+      width: 100vw;
+      height: 100dvh;
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 1;
+    }
+    #hud {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      z-index: 10;
+      background: rgba(2, 12, 27, 0.85);
+      border: 1px solid rgba(0, 240, 255, 0.6);
+      padding: 10px 14px;
+      border-radius: 10px;
+      box-shadow: 0 0 15px rgba(0, 240, 255, 0.25);
+      backdrop-filter: blur(5px);
+      pointer-events: none;
+      max-width: 400px;
+    }
+    #hud h1 {
+      font-size: 0.85rem;
+      letter-spacing: 1.5px;
+      margin-bottom: 4px;
+      color: #7df9ff;
+    }
+    #hud p {
+      font-size: 0.8rem;
+      color: #ffffff;
+      margin-bottom: 4px;
+    }
+    #status {
+      font-weight: bold;
+      color: #00f0ff;
+      text-transform: uppercase;
+    }
+    .gesture-list {
+      margin-top: 6px;
+      font-size: 0.68rem;
+      color: #88c0d0;
+      line-height: 1.35;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2px 6px;
+    }
+    #webcam {
+      display: none;
+    }
+  </style>
+
+  <!-- Three.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <!-- MediaPipe CDNs -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+  <div id="hud">
+    <h1>[ JARVIS MOBILE AI ]</h1>
+    <p>ACTIVE: <span id="status">INITIALIZING WEBCAM...</span></p>
+    <div class="gesture-list">
+      <div>✊ Fist: Sphere</div>
+      <div>👌 OK: Arc Reactor</div>
+      <div>🤟 Spidey: DNA</div>
+      <div>🤘 Horns: Star</div>
+      <div>👍 Thumb: Pyramid</div>
+      <div>✌️ Peace: Cube</div>
+      <div>🖕 Middle: Saturn</div>
+      <div>☝️ Point: Heart</div>
+    </div>
+  </div>
+
+  <div id="canvas-container"></div>
+  <video id="webcam" playsinline muted webkit-playsinline></video>
+
+  <script>
+    // --- MOBILE DETECT & ADAPTIVE CONFIG ---
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
+    
+    // Performance tuning parameters
+    const PARTICLE_COUNT = isMobile ? 1800 : 5000;
+    const PARTICLE_SIZE = isMobile ? 0.28 : 0.18;
+    const MODEL_COMPLEXITY = isMobile ? 0 : 1; // 0 = Fast Mobile, 1 = Heavy Desktop
+    const MAX_PIXEL_RATIO = isMobile ? 1.25 : 2.0;
+    const CAM_WIDTH = isMobile ? 360 : 640;
+    const CAM_HEIGHT = isMobile ? 270 : 480;
+
+    let scene, camera, renderer, particleSystem, geometry;
+    let currentPositions, targetPositions;
+    
+    const shapes = {
+      cloud: new Float32Array(PARTICLE_COUNT * 3),
+      sphere: new Float32Array(PARTICLE_COUNT * 3),
+      saturn: new Float32Array(PARTICLE_COUNT * 3),
+      cube: new Float32Array(PARTICLE_COUNT * 3),
+      heart: new Float32Array(PARTICLE_COUNT * 3),
+      reactor: new Float32Array(PARTICLE_COUNT * 3),
+      dna: new Float32Array(PARTICLE_COUNT * 3),
+      star: new Float32Array(PARTICLE_COUNT * 3),
+      pyramid: new Float32Array(PARTICLE_COUNT * 3)
+    };
+
+    let currentShape = 'cloud';
+    let handOffset = { x: 0, y: 0 };
+
+    // --- SHAPE GENERATION LOGIC ---
+    function initShapes() {
+      for (let i = 0; i < PARTICLE_COUNT; i++) {
+        const i3 = i * 3;
+
+        // 1. CLOUD
+        shapes.cloud[i3]     = (Math.random() - 0.5) * 24;
+        shapes.cloud[i3 + 1] = (Math.random() - 0.5) * 24;
+        shapes.cloud[i3 + 2] = (Math.random() - 0.5) * 24;
+
+        // 2. SPHERE (Fist)
+        const radius = 6.0;
+        const u = Math.random(), v = Math.random();
+        const theta = u * 2.0 * Math.PI, phi = Math.acos(2.0 * v - 1.0);
+        const r = Math.cbrt(Math.random()) * radius;
+        shapes.sphere[i3]     = r * Math.sin(phi) * Math.cos(theta);
+        shapes.sphere[i3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+        shapes.sphere[i3 + 2] = r * Math.cos(phi);
+
+        // 3. SATURN
+        if (i < PARTICLE_COUNT * 0.45) {
+          const pr = Math.cbrt(Math.random()) * 3.2;
+          const pU = Math.random(), pV = Math.random();
+          const pTheta = pU * 2.0 * Math.PI, pPhi = Math.acos(2.0 * pV - 1.0);
+          shapes.saturn[i3]     = pr * Math.sin(pPhi) * Math.cos(pTheta);
+          shapes.saturn[i3 + 1] = pr * Math.sin(pPhi) * Math.sin(pTheta);
+          shapes.saturn[i3 + 2] = pr * Math.cos(pPhi);
+        } else {
+          const ringRad = 5.0 + Math.random() * 4.0;
+          const angle = Math.random() * Math.PI * 2;
+          const rx = Math.cos(angle) * ringRad;
+          const ry = (Math.random() - 0.5) * 0.3;
+          const rz = Math.sin(angle) * ringRad;
+          shapes.saturn[i3]     = rx;
+          shapes.saturn[i3 + 1] = ry * Math.cos(0.4) - rz * Math.sin(0.4);
+          shapes.saturn[i3 + 2] = ry * Math.sin(0.4) + rz * Math.cos(0.4);
+        }
+
+        // 4. CUBE
+        const side = 8.0;
+        shapes.cube[i3]     = (Math.random() - 0.5) * side;
+        shapes.cube[i3 + 1] = (Math.random() - 0.5) * side;
+        shapes.cube[i3 + 2] = (Math.random() - 0.5) * side;
+
+        // 5. HEART
+        const ht = Math.random() * Math.PI * 2;
+        const hZ = (Math.random() - 0.5) * 2.5;
+        const hX = 16 * Math.pow(Math.sin(ht), 3);
+        const hY = 13 * Math.cos(ht) - 5 * Math.cos(2*ht) - 2 * Math.cos(3*ht) - Math.cos(4*ht);
+        shapes.heart[i3]     = (hX / 16) * 5.0;
+        shapes.heart[i3 + 1] = (hY / 16) * 5.0;
+        shapes.heart[i3 + 2] = hZ;
+
+        // 6. ARC REACTOR / TORUS
+        const R = 5.5, ringR = 1.6;
+        const uT = Math.random() * Math.PI * 2;
+        const vT = Math.random() * Math.PI * 2;
+        shapes.reactor[i3]     = (R + ringR * Math.cos(vT)) * Math.cos(uT);
+        shapes.reactor[i3 + 1] = (R + ringR * Math.cos(vT)) * Math.sin(uT);
+        shapes.reactor[i3 + 2] = ringR * Math.sin(vT);
+
+        // 7. DNA DOUBLE HELIX
+        const hHeight = (Math.random() - 0.5) * 15;
+        const strand = i % 2 === 0 ? 0 : Math.PI;
+        const twistSpeed = 0.8;
+        const helixR = 3.2;
+        if (i % 6 === 0) {
+          const interp = Math.random();
+          shapes.dna[i3]     = Math.cos(hHeight * twistSpeed) * helixR * (interp * 2 - 1);
+          shapes.dna[i3 + 1] = hHeight;
+          shapes.dna[i3 + 2] = Math.sin(hHeight * twistSpeed) * helixR * (interp * 2 - 1);
+        } else {
+          shapes.dna[i3]     = Math.cos(hHeight * twistSpeed + strand) * helixR + (Math.random() - 0.5) * 0.3;
+          shapes.dna[i3 + 1] = hHeight;
+          shapes.dna[i3 + 2] = Math.sin(hHeight * twistSpeed + strand) * helixR + (Math.random() - 0.5) * 0.3;
+        }
+
+        // 8. 3D STAR
+        const starU = Math.random() * Math.PI * 2;
+        const starV = Math.acos(2 * Math.random() - 1);
+        const spike = 1 + 0.65 * Math.sin(5 * starU) * Math.sin(5 * starV);
+        const starR = 4.0 * spike;
+        shapes.star[i3]     = starR * Math.sin(starV) * Math.cos(starU);
+        shapes.star[i3 + 1] = starR * Math.sin(starV) * Math.sin(starU);
+        shapes.star[i3 + 2] = starR * Math.cos(starV);
+
+        // 9. PYRAMID
+        const pyH = Math.random();
+        const pyLayerWidth = pyH * 6.5;
+        shapes.pyramid[i3]     = (Math.random() - 0.5) * pyLayerWidth * 2;
+        shapes.pyramid[i3 + 1] = (1 - pyH) * 9 - 4.5;
+        shapes.pyramid[i3 + 2] = (Math.random() - 0.5) * pyLayerWidth * 2;
+      }
+    }
+
+    // --- THREE.JS ENGINE SETUP ---
+    function initThree() {
+      const container = document.getElementById('canvas-container');
+      scene = new THREE.Scene();
+
+      camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+      camera.position.z = 22;
+
+      renderer = new THREE.WebGLRenderer({ antialias: !isMobile, alpha: true, powerPreference: "high-performance" });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO));
+      container.appendChild(renderer.domElement);
+
+      initShapes();
+
+      geometry = new THREE.BufferGeometry();
+      currentPositions = new Float32Array(shapes.cloud);
+      targetPositions = shapes.cloud;
+
+      geometry.setAttribute('position', new THREE.BufferAttribute(currentPositions, 3));
+
+      const material = new THREE.PointsMaterial({
+        color: 0x00f0ff,
+        size: PARTICLE_SIZE,
+        transparent: true,
+        opacity: 0.85,
+        blending: THREE.AdditiveBlending
+      });
+
+      particleSystem = new THREE.Points(geometry, material);
+      scene.add(particleSystem);
+
+      window.addEventListener('resize', onWindowResize);
+    }
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    // --- GESTURE PROCESSING ---
+    function setShape(newShape) {
+      if (currentShape !== newShape) {
+        currentShape = newShape;
+        targetPositions = shapes[newShape];
+        document.getElementById('status').innerText = newShape.toUpperCase();
+      }
+    }
+
+    function processHandLandmarks(results) {
+      if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+        setShape('cloud');
+        handOffset.x = 0;
+        handOffset.y = 0;
+        return;
+      }
+
+      let totalX = 0, totalY = 0;
+      results.multiHandLandmarks.forEach(landmarks => {
+        totalX += landmarks[9].x;
+        totalY += landmarks[9].y;
+      });
+      
+      const avgX = totalX / results.multiHandLandmarks.length;
+      const avgY = totalY / results.multiHandLandmarks.length;
+
+      handOffset.x = (0.5 - avgX) * 20;
+      handOffset.y = (0.5 - avgY) * 15;
+
+      const lm = results.multiHandLandmarks[0];
+      const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y, p1.z - p2.z);
+
+      const indexExt  = dist(lm[8], lm[0]) > 0.32 && lm[8].y < lm[6].y;
+      const middleExt = dist(lm[12], lm[0]) > 0.32 && lm[12].y < lm[10].y;
+      const ringExt   = dist(lm[16], lm[0]) > 0.32 && lm[16].y < lm[14].y;
+      const pinkyExt  = dist(lm[20], lm[0]) > 0.32 && lm[20].y < lm[18].y;
+      
+      const indexCurled  = dist(lm[8], lm[0]) < 0.28;
+      const middleCurled = dist(lm[12], lm[0]) < 0.28;
+      const ringCurled   = dist(lm[16], lm[0]) < 0.28;
+      const pinkyCurled  = dist(lm[20], lm[0]) < 0.28;
+
+      const thumbIndexPinch = dist(lm[4], lm[8]);
+      const thumbUp = lm[4].y < lm[2].y - 0.08 && indexCurled && middleCurled && ringCurled && pinkyCurled;
+
+      const isFist = indexCurled && middleCurled && ringCurled && pinkyCurled && !thumbUp;
+      const isOK = thumbIndexPinch < 0.085 && middleExt && ringExt && pinkyExt;
+      const isSpidey = indexExt && pinkyExt && middleCurled && ringCurled && dist(lm[4], lm[0]) > 0.28;
+      const isHorns = indexExt && pinkyExt && middleCurled && ringCurled && dist(lm[4], lm[0]) < 0.28;
+      const isMiddleFinger = middleExt && indexCurled && ringCurled && pinkyCurled;
+      const isPeace = indexExt && middleExt && ringCurled && pinkyCurled;
+      const isPoint = indexExt && middleCurled && ringCurled && pinkyCurled;
+
+      if (isFist) {
+        setShape('sphere');
+      } else if (thumbUp) {
+        setShape('pyramid');
+      } else if (isOK) {
+        setShape('reactor');
+      } else if (isSpidey) {
+        setShape('dna');
+      } else if (isHorns) {
+        setShape('star');
+      } else if (isMiddleFinger) {
+        setShape('saturn');
+      } else if (isPeace) {
+        setShape('cube');
+      } else if (isPoint) {
+        setShape('heart');
+      } else {
+        setShape('cloud');
+      }
+    }
+
+    // --- MEDIAPIPE OPTIMIZED FOR MOBILE ---
+    function initWebcam() {
+      const videoElement = document.getElementById('webcam');
+
+      const hands = new Hands({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+      });
+
+      hands.setOptions({
+        maxNumHands: 2,
+        modelComplexity: MODEL_COMPLEXITY,
+        minDetectionConfidence: 0.55,
+        minTrackingConfidence: 0.55
+      });
+
+      hands.onResults(processHandLandmarks);
+
+      const cameraUtils = new Camera(videoElement, {
+        onFrame: async () => {
+          await hands.send({ image: videoElement });
+        },
+        width: CAM_WIDTH,
+        height: CAM_HEIGHT
+      });
+
+      cameraUtils.start();
+    }
+
+    // --- ANIMATION LOOP ---
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const posAttr = geometry.attributes.position;
+      const posArray = posAttr.array;
+
+      // Smooth interpolation lerp (Higher value = faster morphing)
+      const lerpFactor = isMobile ? 0.12 : 0.08;
+      for (let i = 0; i < PARTICLE_COUNT * 3; i++) {
+        posArray[i] += (targetPositions[i] - posArray[i]) * lerpFactor;
+      }
+
+      posAttr.needsUpdate = true;
+
+      particleSystem.position.x += (handOffset.x - particleSystem.position.x) * 0.1;
+      particleSystem.position.y += (handOffset.y - particleSystem.position.y) * 0.1;
+
+      particleSystem.rotation.y += 0.006;
+      particleSystem.rotation.x += 0.002;
+
+      renderer.render(scene, camera);
+    }
+
+    // INITIALIZE
+    initThree();
+    initWebcam();
+    animate();
+  </script>
+</body>
+</html>
